@@ -73,9 +73,17 @@ jobs:
           # the command and the bundler dies with `program not found` after a
           # 25-minute compile that otherwise succeeded. Drop it on the
           # throwaway ref only — the patch branch keeps upstream's config.
-          jq 'del(.bundle.windows.signCommand)' src-tauri/tauri.conf.json > conf.tmp
+          # ...and createUpdaterArtifacts makes tauri sign an updater bundle
+          # with TAURI_SIGNING_PRIVATE_KEY, which build.yml sets to an empty
+          # string rather than leaving unset when sign-binaries is false. An
+          # empty key is not an absent one, so tauri tries to decode it and
+          # dies with "Missing comment in secret key" — after both installers
+          # are already on disk, which is why nothing gets uploaded. We do not
+          # want updater artifacts here anyway.
+          jq 'del(.bundle.windows.signCommand) | .bundle.createUpdaterArtifacts = false' \
+            src-tauri/tauri.conf.json > conf.tmp
           mv conf.tmp src-tauri/tauri.conf.json
-          git commit --quiet -am "ci: build Windows unsigned"
+          git commit --quiet -am "ci: build Windows unsigned, no updater artifacts"
 
           build_ref="ci/windows-patched"
           git push --force origin "HEAD:refs/heads/$build_ref"
