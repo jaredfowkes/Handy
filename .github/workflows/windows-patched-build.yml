@@ -67,6 +67,16 @@ jobs:
             exit 1
           fi
 
+          # tauri.conf.json hard-codes upstream's Azure Trusted Signing command,
+          # but build.yml only installs trusted-signing-cli when sign-binaries
+          # is true. Upstream never builds Windows unsigned, so nothing strips
+          # the command and the bundler dies with `program not found` after a
+          # 25-minute compile that otherwise succeeded. Drop it on the
+          # throwaway ref only — the patch branch keeps upstream's config.
+          jq 'del(.bundle.windows.signCommand)' src-tauri/tauri.conf.json > conf.tmp
+          mv conf.tmp src-tauri/tauri.conf.json
+          git commit --quiet -am "ci: build Windows unsigned"
+
           build_ref="ci/windows-patched"
           git push --force origin "HEAD:refs/heads/$build_ref"
           echo "ref=$build_ref" >> "$GITHUB_OUTPUT"
