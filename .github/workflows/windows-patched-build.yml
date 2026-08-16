@@ -1,0 +1,90 @@
+name: "Windows patched build"
+
+# Builds Handy for Windows with the slate-blue overlay patch, because the
+# machines that need it cannot build it themselves: CMake, the Vulkan SDK and
+# the MSVC build tools all require administrator on Windows, and a managed
+# corporate laptop does not have it. A GitHub runner does.
+#
+# Run it from the Actions tab. The artifact is the NSIS .exe and the .msi,
+# unsigned, kept for 30 days.
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream-ref:
+        description: "Upstream tag to build (blank = newest v* tag)"
+        required: false
+        type: string
+        default: ""
+      patch-branch:
+        description: "Branch holding the overlay patch"
+        required: false
+        type: string
+        default: "slate-overlay-accent"
+
+jobs:
+  # The patch is one commit that gets rebased onto whichever upstream tag we
+  # want, exactly as Tools/Handy/build-handy.py does locally. The rebased
+  # commits have to exist on the remote for build.yml to check them out, so
+  # they are force-pushed to a throwaway ref rather than to the patch branch.
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      ref: ${{ steps.rebase.outputs.ref }}
+      upstream: ${{ steps.rebase.outputs.upstream }}
+    steps:
+      - name: Checkout the patch branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.patch-branch }}
+          fetch-depth: 0
+
+      - name: Rebase the patch onto the upstream tag
+        id: rebase
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/cjpais/Handy.git
+          git fetch --quiet upstream --tags
+
+          target="${{ inputs.upstream-ref }}"
+          if [ -z "$target" ]; then
+            target=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          fi
+          if [ -z "$target" ]; then
+            echo "::error::No upstream v* tags found."
+            exit 1
+          fi
+
+          echo "Rebasing ${{ inputs.patch-branch }} onto $target"
+          if ! git rebase "$target"; then
+            git rebase --abort || true
+            echo "::error::The overlay patch no longer applies to $target. Rebase it by hand on the patch branch, push, and run this again."
+            exit 1
+          fi
+
+          build_ref="ci/windows-patched"
+          git push --force origin "HEAD:refs/heads/$build_ref"
+          echo "ref=$build_ref" >> "$GITHUB_OUTPUT"
+          echo "upstream=$target" >> "$GITHUB_OUTPUT"
+          echo "Built from $target with the overlay patch on top." >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: prepare
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build.yml
+    with:
+      platform: windows-latest
+      target: x86_64-pc-windows-msvc
+      ref: ${{ needs.prepare.outputs.ref }}
+      upload-artifacts: true
+      asset-prefix: handy-slate
+      # Never restore a Rust cache for something that gets installed on a real
+      # machine — a stale cached native lib would link in silently.
+      no-cache: true
+    secrets: inherit
